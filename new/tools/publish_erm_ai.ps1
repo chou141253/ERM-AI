@@ -95,7 +95,7 @@ function Get-Python {
 function Ensure-PythonPackages {
     $script:Python = Get-Python
     Invoke-Native $script:Python @('-c', "import sys; assert sys.version_info >= (3,10), 'Python 3.10+ required'")
-    if (-not (Test-Native $script:Python @('-c', "import torch,timm,yaml,pytest,sklearn,safetensors,huggingface_hub; assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= (2,6), 'PyTorch 2.6+ required'"))) {
+    if (-not (Test-Native $script:Python @('-c', "import torch,timm,yaml,pytest,sklearn,safetensors,huggingface_hub,inspect; from huggingface_hub import HfApi; assert 'write' in inspect.signature(HfApi.auth_check).parameters, 'Update huggingface_hub for write-access checks'; assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= (2,6), 'PyTorch 2.6+ required'"))) {
         Write-Host 'Installing required packages into the selected local virtual environment ...'
         Invoke-Native $script:Python @('-m', 'pip', 'install', '-r', (Join-Path $CodeRoot 'requirements-dev.txt'), 'huggingface_hub', 'safetensors')
     }
@@ -115,7 +115,7 @@ function Assert-PublicText([string]$Text, [string]$Name) {
 function Get-PublicFiles {
     $selected = New-Object System.Collections.Generic.List[object]
     $top = @('main.py', 'README.md', '.gitignore', 'requirements.txt', 'requirements-dev.txt', 'requirements-tested.txt',
-             'PUBLISHING.md', 'publish_erm_ai.bat', 'publish_github.bat', 'publish_huggingface.bat', 'publish_preview.bat')
+             'PUBLISHING.md', 'INFERENCE.md', 'MODEL_CATALOG.md', 'publish_erm_ai.bat', 'publish_github.bat', 'publish_huggingface.bat', 'publish_preview.bat')
     foreach ($required in @('main.py', 'README.md', '.gitignore', 'requirements.txt', 'requirements-dev.txt', 'PUBLISHING.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $CodeRoot $required) -PathType Leaf)) { throw ('Required public source file is missing: ' + $required) }
     }
@@ -155,6 +155,8 @@ Single-stream and multistream OCT research code lives in [`new/`](new/).
 
 - [Usage and experiment workflow](new/README.md)
 - [Windows publishing launcher](new/PUBLISHING.md)
+- [Published model download and inference](new/INFERENCE.md)
+- [All stream/fold models and model architecture](new/MODEL_CATALOG.md)
 - Model repository: https://huggingface.co/ntuhophai/ERM-AI
 
 ```powershell
@@ -221,6 +223,26 @@ function Assert-Fork($Fork, $User, $Upstream) {
     }
 }
 
+function Get-ReusableBranch($User, [string]$ForkRepo) {
+    $receiptPath = Join-Path $WorkRoot 'last-github.json'
+    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { return $null }
+    try { $previous = [IO.File]::ReadAllText($receiptPath, [Text.Encoding]::UTF8) | ConvertFrom-Json }
+    catch { return $null }
+    if ($previous.repo -ne $ForkRepo -or $previous.branch -notmatch '^publish/new-code-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}$' -or $previous.commit -notmatch '^[a-f0-9]{40}$') { return $null }
+    $ref = Invoke-GhJson 'GET' ('repos/' + $ForkRepo + '/git/ref/heads/' + $previous.branch) -Allow404
+    if (-not $ref -or $ref.object.sha -ne $previous.commit) {
+        Write-Host 'Previous branch is missing or has edits outside this publisher. A new branch will preserve those edits.'
+        return $null
+    }
+    $head = [Uri]::EscapeDataString($User.login + ':' + $previous.branch)
+    $pulls = @(Invoke-GhJson 'GET' ('repos/' + $UpstreamRepo + '/pulls?state=all&head=' + $head))
+    if (@($pulls | Where-Object { $_ -and $_.state -eq 'closed' }).Count -gt 0 -and @($pulls | Where-Object { $_ -and $_.state -eq 'open' }).Count -eq 0) {
+        Write-Host 'Previous PR is closed or merged. A new publication branch will be created.'
+        return $null
+    }
+    return $previous
+}
+
 function Publish-GitHub($Files) {
     Write-Host 'Running the local test suite before publishing source ...' -ForegroundColor Cyan
     $env:OMP_NUM_THREADS = '2'
@@ -235,7 +257,7 @@ function Publish-GitHub($Files) {
     if ($user.login -eq 'ntuhophai') { throw 'The active GitHub account owns the upstream. Sign in with your personal account to create a fork.' }
     $upstream = Invoke-GhJson 'GET' ('repos/' + $UpstreamRepo)
     $forkRepo = $user.login + '/ERM-AI'
-    Write-Host ('Source target: ' + $forkRepo + ' (a new branch; no automatic PR or merge)')
+    Write-Host ('Source target: ' + $forkRepo + ' (publication branch; no automatic PR or merge)')
     $fork = Invoke-GhJson 'GET' ('repos/' + $forkRepo) -Allow404
     if ($null -eq $fork) {
         Invoke-Native $script:Gh @('repo', 'fork', $UpstreamRepo, '--clone=false', '--remote=false')
@@ -250,6 +272,11 @@ function Publish-GitHub($Files) {
     $baseBranch = $upstream.default_branch
     $baseRef = Invoke-GhJson 'GET' ('repos/' + $UpstreamRepo + '/git/ref/heads/' + $baseBranch)
     $baseCommit = Invoke-GhJson 'GET' ('repos/' + $UpstreamRepo + '/git/commits/' + $baseRef.object.sha)
+    $reusable = Get-ReusableBranch $user $forkRepo
+    if ($reusable) {
+        $baseCommit = Invoke-GhJson 'GET' ('repos/' + $forkRepo + '/git/commits/' + $reusable.commit)
+        Write-Host ('Updating the existing publication branch: ' + $reusable.branch)
+    }
     $entries = New-Object System.Collections.Generic.List[object]
     foreach ($file in $Files) {
         Write-Host ('Uploading source: ' + $file.path)
@@ -259,11 +286,16 @@ function Publish-GitHub($Files) {
     $tree = Invoke-GhJson 'POST' ('repos/' + $forkRepo + '/git/trees') @{ base_tree = $baseCommit.tree.sha; tree = $entries.ToArray() }
     $author = @{ name = $user.login; email = ([string]$user.id + '+' + $user.login + '@users.noreply.github.com') }
     $commit = Invoke-GhJson 'POST' ('repos/' + $forkRepo + '/git/commits') @{
-        message = 'Add patient-grouped multistream training, validation and inference';
+        message = 'Add complete model collection publishing and inference documentation';
         tree = $tree.sha; parents = @($baseCommit.sha); author = $author; committer = $author
     }
-    $branch = 'publish/new-code-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    [void](Invoke-GhJson 'POST' ('repos/' + $forkRepo + '/git/refs') @{ ref = ('refs/heads/' + $branch); sha = $commit.sha })
+    if ($reusable) {
+        $branch = $reusable.branch
+        [void](Invoke-GhJson 'PATCH' ('repos/' + $forkRepo + '/git/refs/heads/' + $branch) @{ sha = $commit.sha; force = $false })
+    } else {
+        $branch = 'publish/new-code-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        [void](Invoke-GhJson 'POST' ('repos/' + $forkRepo + '/git/refs') @{ ref = ('refs/heads/' + $branch); sha = $commit.sha })
+    }
     $compare = 'https://github.com/' + $UpstreamRepo + '/compare/' + [Uri]::EscapeDataString($baseBranch) + '...' + $user.login + ':' + $branch + '?expand=1'
     $script:PublishedCodeUrl = 'https://github.com/' + $forkRepo + '/tree/' + $commit.sha + '/new'
     Save-Json (Join-Path $WorkRoot 'last-github.json') @{ repo = $forkRepo; branch = $branch; commit = $commit.sha; source_url = $script:PublishedCodeUrl; compare_url = $compare }
@@ -287,54 +319,32 @@ function Select-File([string]$Title, [string]$Filter, [string]$InitialDirectory)
 }
 
 function Publish-HuggingFace {
-    Write-Host ('Model target: https://huggingface.co/' + $ModelRepo + ' (direct commit, not PR)') -ForegroundColor Cyan
-    $initial = Join-Path $WorkspaceRoot 'old/records/image-classification-ms-8s'
-    Write-Host 'Select exactly one model checkpoint. Cancel skips the model phase; completed GitHub work is kept.'
-    $checkpoint = Select-File 'Choose one checkpoint to export and publish' 'PyTorch checkpoint (*.pth;*.pt)|*.pth;*.pt' $initial
-    if (-not $checkpoint) { Write-Host 'HUGGING FACE SKIPPED: model selection was cancelled.'; return }
-    $modeProbe = "import sys,torch; x=torch.load(sys.argv[1],map_location='cpu',weights_only=True); print('versioned' if isinstance(x,dict) and x.get('format_version')==1 and 'state_dict' in x else 'legacy')"
-    $probeResult = @(& $script:Python -c $modeProbe $checkpoint)
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot safely inspect the selected checkpoint.' }
-    $mode = ($probeResult -join '').Trim()
-    if ($mode -notin @('versioned', 'legacy')) { throw 'Unexpected checkpoint format.' }
-    $exportArguments = @((Join-Path $PSScriptRoot 'export_public_model.py'), '--checkpoint', $checkpoint, '--code-url', $script:PublishedCodeUrl)
-    if ($mode -eq 'legacy') {
-        Write-Host 'Legacy weights do not record stream order/preprocessing. Select a YAML matching the original model.' -ForegroundColor Yellow
-        Write-Host 'Example: publish_profiles/legacy_8_stream.yaml for the original eight-stream ResNet50, provided that its stream order is confirmed.'
-        $configuration = Select-File 'Choose the matching model configuration' 'YAML configuration (*.yaml;*.yml)|*.yaml;*.yml' (Join-Path $CodeRoot 'publish_profiles')
-        if (-not $configuration) { Write-Host 'HUGGING FACE SKIPPED: legacy configuration selection was cancelled.'; return }
-        $exportArguments += @('--legacy-config', $configuration)
-    }
-    Write-Host 'Checking exact model keys and shapes. The preview contains only public model settings ...'
-    Invoke-Native $script:Python ($exportArguments + @('--preview'))
-    if ($mode -eq 'legacy') {
-        Write-Host 'Tensor checks cannot prove the historical stream order or label meaning.'
-        $confirmed = Read-Host 'Type YES only if the displayed stream order, labels and preprocessing match the original experiment'
-        if ($confirmed -cne 'YES') { Write-Host 'HUGGING FACE SKIPPED: legacy settings were not confirmed.'; return }
-    }
-    $bundle = Join-Path $SessionRoot 'public-model'
-    Invoke-Native $script:Python ($exportArguments + @('--output', $bundle))
-    $allowed = @('model.safetensors', 'config.json', 'modeling_multistream.py', 'README.md', 'requirements.txt')
-    $files = @(Get-ChildItem -LiteralPath $bundle -Force)
-    if ($files.Count -ne $allowed.Count -or @($files | Where-Object { $_.PSIsContainer -or $_.Name -notin $allowed }).Count -gt 0) {
-        throw 'Unexpected files in the public model bundle.'
-    }
-    foreach ($file in $files) {
-        if ($file.Name -ne 'model.safetensors') { Assert-PublicText ([IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8)) $file.Name }
-    }
-    $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
-    Write-Host ('Public bundle: ' + $allowed.Count + ' files, ' + [Math]::Round($totalBytes / 1MB, 1) + ' MB. Private patient/sample metadata is excluded.')
-    Write-Host 'Verifying this account can publish to the model target; no password or token is written into the scripts ...'
-    $uploadArguments = @((Join-Path $PSScriptRoot 'upload_public_model.py'), '--folder', $bundle, '--repo', $ModelRepo)
-    Invoke-Native $script:Python $uploadArguments
+    Write-Host ('Model target: https://huggingface.co/' + $ModelRepo + ' (all models, direct commits)') -ForegroundColor Cyan
+    $records = Join-Path $WorkspaceRoot 'old/records'
+    $profiles = Join-Path $CodeRoot 'publish_profiles/legacy_collection.yaml'
+    $exporter = Join-Path $PSScriptRoot 'export_model_collection.py'
+    $uploader = Join-Path $PSScriptRoot 'upload_model_collection.py'
+    Write-Host 'Checking all stream/fold sources. No checkpoint picker is needed.'
+    Invoke-Native $script:Python @($exporter, '--records-root', $records, '--profiles', $profiles, '--plan-only')
+    Write-Host 'Legacy profiles are explicit settings, not proof of historical stream semantics.'
+    Write-Host 'Four-/six-stream runtime versions were not retained; review legacy_collection.yaml if their resize settings differ.'
+    $confirmed = Read-Host 'Type YES to publish every listed legacy model using these declared profiles'
+    if ($confirmed -cne 'YES') { Write-Host 'HUGGING FACE SKIPPED: collection profiles were not confirmed.'; return }
+    Write-Host 'Confirming write access before exporting the full collection ...'
+    Invoke-Native $script:Python @($uploader, '--repo', $ModelRepo, '--login-only')
+    $collection = Join-Path $WorkRoot 'model-collection'
+    $uploadState = Join-Path $WorkRoot 'upload-collection-state.json'
+    Write-Host 'Exporting all models into stable per-condition/per-fold directories. Completed exports are reused on retry.'
+    Invoke-Native $script:Python @($exporter, '--records-root', $records, '--profiles', $profiles, '--output', $collection, '--code-url', $script:PublishedCodeUrl)
+    Write-Host 'Uploading models one at a time. Remote weights/configs are checked before skipping completed items.'
+    Invoke-Native $script:Python @($uploader, '--folder', $collection, '--repo', $ModelRepo, '--state-file', $uploadState)
     Write-Host ('HUGGING FACE COMPLETE: https://huggingface.co/' + $ModelRepo) -ForegroundColor Green
 }
-
 if ($DefinitionsOnly) { return }
 Set-Location -LiteralPath $CodeRoot
 Write-Host 'ERM-AI publisher' -ForegroundColor Cyan
-Write-Host 'GitHub: personal fork and a new source branch; you create the PR in the browser.'
-Write-Host 'Hugging Face: one selected checkpoint, exported to public inference files, then directly committed.'
+Write-Host 'GitHub: personal fork and publication branch; you create or review the PR in the browser.'
+Write-Host 'Hugging Face: every stream/fold model, plus historical tensor archives, in separate directories.'
 Write-Host 'Passwords/tokens are entered only in the official local login flow. The original files are kept.'
 $publicFiles = @(Get-PublicFiles)
 Save-Json (Join-Path $SessionRoot 'public-source-manifest.json') @{

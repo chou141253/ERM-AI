@@ -1,77 +1,88 @@
-# 雙擊發布程式與模型
+# 雙擊發布程式與全部模型
 
-在 Windows 檔案總管進入 `new/`，雙擊 **`publish_erm_ai.bat`**。它依序完成 GitHub 與 Hugging Face 兩個流程。
+在 Windows 檔案總管進入 `new/`，雙擊 **`publish_erm_ai.bat`**。GitHub 會發布程式與文件；Hugging Face 會發布每個 stream 條件、每個 fold 的模型。
 
-## GitHub：自動 fork，再推到你的分支
+如果舊 BAT 仍停在「Select exactly one model checkpoint」或檔案選擇視窗，先取消並關閉舊視窗，再執行更新後的 BAT。它不再要求你挑一個 checkpoint。
 
-1. 先執行本機測試，檢查要公開的檔案。
-2. 若電腦未安裝 GitHub CLI，下載官方可攜版到 `.publish-work/` 並核對 SHA256；不需要更動系統 Git。
-3. 第一次透過瀏覽器登入 **你的個人 GitHub 帳號**。
-4. 自動建立或重用 `<登入帳號>/ERM-AI` fork，確認它來自 `ntuhophai/ERM-AI`。同名無關 repo 會讓流程停止。
-5. 把新版程式、設定、README 和測試提交到 fork 的新分支，原 repo 和 fork 的預設分支均不改動。
-6. 成功後開啟 GitHub 比較頁，由你按 **Create pull request**。程式不替你建立或合併 PR。
+## 1. GitHub：fork、更新分支，由你建立 PR
 
-啟動檔以本機實際登入的帳號為準，不硬編碼 `chou141253`。若登入的是原 repo 擁有者 `ntuhophai`，無法 fork 自己的 repo；請登入你想建立 fork 的個人帳號。
+1. 先跑本機測試，核對公開程式清單。
+2. 若未安裝 GitHub CLI，下載官方可攜版到 `.publish-work/` 並核對 SHA256。
+3. 尚未登入時，依官方瀏覽器提示登入你的個人 GitHub 帳號。
+4. 建立或重用 `<登入帳號>/ERM-AI` fork，確認它來自 `ntuhophai/ERM-AI`。同名無關 repo 會使流程停止。
+5. 提交新版程式、設定、測試與文件。上次發布分支仍符合本機紀錄，且 PR 尚未關閉／合併時，會接續更新該分支；已有 PR 會顯示更新內容。若分支遭其他操作修改，或 PR 已關閉／合併，則建立新分支保留既有修改。
+6. 成功後開啟比較頁。尚未建立 PR 時，由你按 **Create pull request**；已有開啟的 PR 則到該 PR 檢查更新。
 
-公開 repo 保持 `new/` 程式目錄結構，另建立根目錄 README。`old/`、資料、模型、病人 manifests、預測結果、環境與工作暫存都不包含在 source 提交中。只處理明確的程式／文件清單，不執行 `git add .`。
+腳本不 force push，也不替你合併 PR。登入帳號以本機實際授權為準，不寫死個人帳號。若使用原 repo 擁有者 `ntuhophai`，請改用要建立 fork 的個人帳號。
 
-## Hugging Face：直接推送你選的模型
+公開程式位於 repo 的 `new/`，包含訓練、驗證、模型目錄與 Hugging Face 推論工具；根目錄另有導覽 README。`old/`、真實影像、病人 manifests、原始 checkpoint、預測結果、環境與暫存不包含在 source 提交中。
 
-1. 選擇視窗讓你選 **一個 `.pth`／`.pt` checkpoint**。
-2. 新版 checkpoint 自帶架構、stream 順序、標籤與前處理，會直接核對。
-3. 若是 `old/` 的原始權重，另外選對應 YAML。八流可選 `publish_profiles/legacy_8_stream.yaml`；其他模型需準備正確設定，不能套用八流設定。
-4. 預覽顯示公開設定。原始權重不能證明 stream 的語意順序，因此 legacy 模型需輸入 `YES`，確認它符合原實驗。
-5. 匯出純權重 `model.safetensors`，metadata 使用允許清單，不帶病人／病例編號、完整訓練設定、本機路徑或內部切分指紋。
-6. 第一次使用官方 Hugging Face 本機登入提示。請用對 **`ntuhophai/ERM-AI` 有寫入權限**的帳號；可走瀏覽器授權，或在本機提示輸入適當寫入權限的 Token。不要把 Token 寫進 BAT、Python、README 或聊天。
-7. 將以下五個檔案直接 commit 到 `https://huggingface.co/ntuhophai/ERM-AI`，不建立 Hugging Face PR：
+## 2. Hugging Face：全部 stream 與 fold，直接提交
+
+目的地：[ntuhophai/ERM-AI](https://huggingface.co/ntuhophai/ERM-AI)，不需 fork，也不建立 Hugging Face PR。
+
+1. 自動核對 `old/records/`：**16 組條件 × fold 0–9 = 160 個模型**，另有 **7 個歷史模型**，合計 167 個。缺 fold、重複 fold 或來源格式異常就停止，不會默默漏傳。
+2. 顯示條件、stream 順序及前處理。原始權重不含完整推論設定，因此請先閱讀 [模型說明](MODEL_CATALOG.md) 與 `publish_profiles/legacy_collection.yaml`，確認符合原實驗後，在本機提示輸入 `YES`。
+3. 透過官方 Hugging Face 本機登入確認對目的 repo 有寫入權限，再開始大型匯出。尚未授權時，依提示使用瀏覽器登入，或在本機官方提示輸入具有適當寫入權限的 Token。不要把密碼或 Token 寫進腳本或聊天。
+4. 匯出純 tensors 的 `model.safetensors`，嚴格檢查可推論模型的架構、鍵與尺寸。公開設定不帶病人／病例編號、內部資料路徑或切分指紋。
+5. 逐模型提交到獨立目錄，核對遠端內容，最後才發布完整 `catalog.json` 與共用文件。
 
 ```text
-model.safetensors
-config.json
-modeling_multistream.py
-README.md
-requirements.txt
+ntuhophai/ERM-AI
+├── catalog.json
+├── modeling_multistream.py
+├── README.md
+├── requirements.txt
+├── models/
+│   ├── single_gray_inner/fold_0/{model.safetensors,config.json,README.md}
+│   ├── ...所有16組，各fold_0到fold_9...
+│   └── fusion_8/fold_9/{model.safetensors,config.json,README.md}
+└── historical/
+    └── <project>/{model.safetensors,config.json,README.md}
 ```
 
-**這會直接更新模型 repo 根目錄的同名檔案。** 新 commit 保留既有其他檔案。每次只選一個 checkpoint；重複上傳到根目錄不能保存多個 fold。
+**模型不會互相覆寫。** 每個模型有獨立設定與說明。既有根目錄 `model.safetensors`／`config.json` 等單模型檔案不會刪除；新版推論依 `catalog.json` 選取模型。
 
-若模型或 legacy 設定視窗按取消，模型階段會略過，已成功的 GitHub 提交仍保留。
+7 個歷史模型缺少 fold／stream／前處理資訊，會保存原始 tensors 並標示 `inference_ready=false`。完整十折的 160 個模型可依宣告設定載入；這不表示其效能或歷史設定已獲獨立驗證。四流／六流的原 runtime snapshot 未保留，profile 中的 antialias=true 是待原始紀錄核對的明確選擇。詳見 [MODEL_CATALOG.md](MODEL_CATALOG.md)。
 
-### 舊模型的前處理
+`old/output/best_model.pth` 是八流 fold 9 的相同副本，不重複上傳。合成 smoke 模型也不列入此批研究權重。
 
-八流 profile 依現存設定及 2025-09-23 W&B 環境描述：ResNet50、448 crop、tensor resize、`antialias: false`。其他實驗的 torchvision 版本可能不同；例如 2025-09-18 雙流環境為 0.17.1，resize 的預設 antialias 已變為 true。因此 legacy 設定必須明確寫 `resize_backend` 與 `antialias`。
+## 3. 大小、時間與失敗重試
 
-鍵與尺寸檢查只能確認架構，不能證明歷史 stream 順序、標籤臨床意義或評估獨立性。Model Card 保留這些限制。`smoke_output/` 模型會標示 demo，不能作為正式眼科訓練模型。
+原始模型共 **43,429,382,301 bytes，約 43.4 GB**。第一次需要額外約同等空間保存公開權重包，以及少量暫存；匯出、檢查與網路上傳會花時間，視窗會逐模型顯示進度。請保持電腦與網路連線。
 
-## 其他啟動檔
+穩定的公開包保存在`new/.publish-work/model-collection/`，匯出快取與上傳紀錄另存在 `new/.publish-work/`，不提交到公開 repo。
+
+- 匯出失敗：保留已完成模型；重跑後核對來源與輸出雜湊，符合才重用。若提示快取包含本次清單外的檔案，先將 `new/.publish-work/model-collection/` 改名保存，再重跑產生新的快取。
+- 上傳失敗：保留已提交模型；重跑會先核對遠端權重／設定／文件，符合才略過。只有文件改動時只更新文件。
+- GitHub 已完成、Hugging Face 尚未完成：雙擊 **`publish_huggingface.bat`** 接續模型流程，無需重傳程式。
+- 程式或文件又改動：雙擊 **`publish_erm_ai.bat`**，更新 GitHub 與模型文件；已相同的模型權重會重用。
+
+腳本不刪除或搬動原始實驗，也不撤回已成功的遠端提交。最終完整 catalog 在全部模型通過遠端核對後才提交；首次上傳中途還不能使用完整 collection 推論。
+
+## 4. 啟動檔與環境
 
 | 檔案 | 動作 |
 |---|---|
-| `publish_erm_ai.bat` | GitHub fork／分支提交，接著 Hugging Face 模型直接 push |
-| `publish_github.bat` | 只做 GitHub |
-| `publish_huggingface.bat` | 只做 Hugging Face，適合登入／網路問題後重試 |
-| `publish_preview.bat` | 只列出公開程式清單；不登入、不 fork、不上傳 |
+| `publish_erm_ai.bat` | GitHub 程式與文件，接著 Hugging Face 全167模型 |
+| `publish_github.bat` | 只發布 GitHub 程式與文件 |
+| `publish_huggingface.bat` | 只匯出／上傳全部模型，亦用於續傳 |
+| `publish_preview.bat` | 列出公開程式清單；不登入、不 fork、不上傳 |
 
-每次 GitHub 發布建立新分支，不 force push。模型錯誤不撤回已完成的 GitHub 提交。視窗最後停留，方便閱讀成功訊息或錯誤。
+優先使用 `new/.venv/`。若不存在，嘗試以已安裝的 Python 3.10 以上在 `.publish-work/runtime/` 建立隔離環境；首次安裝 PyTorch 等依賴需時間與磁碟空間。Python 未安裝或版本太舊時會停止。
 
-## 環境與暫存
+模型使用方式見 [INFERENCE.md](INFERENCE.md)：列出條件、只下載指定 fold、跑全部 fold、選擇 ensemble、讀取機率 CSV，以及固定模型版本。重新訓練與驗證見 [README.md](README.md)。
 
-優先使用 `new/.venv/`。若不存在，嘗試用已安裝的 Python 3.10 以上在 `.publish-work/runtime/` 建立隔離環境；首次安裝 PyTorch 等依賴可能需要幾分鐘與較多磁碟空間。Python 太舊或未安裝時會明確停止。
+## 5. 本機驗證範圍
 
-`.publish-work/` 保存程式清單、公開模型包與遠端 commit 資訊，方便重試；它不會提交到 GitHub。本機原始權重與舊實驗不會刪除或搬動。憑證由官方工具保存在本機，腳本不讀出或公開 Token。
+2026-10-12 更新後完整測試：**125 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。
 
-只有按啟動檔才會建立 fork／提交／上傳。可先用 `publish_preview.bat`。交付前的檢查只做本機語法、測試與匯出驗證，沒有替你執行遠端發布。
+測試涵蓋完整性核對、純權重匯出與載回、快取重用、分 fold 推論、機率平均、版本與雜湊核對、GitHub 分支更新，以及 Hugging Face 逐模型提交與續傳。遠端寫入測試使用模擬 API；測試本身不登入、不 fork、不上傳。
 
-## 本機驗證
-
-2026-10-12 完整測試為 **79 passed、16 subtests passed**。已實際執行 Preview BAT（含中文目錄）、PowerShell 語法檢查、Python 預檢，以及官方 GitHub CLI 可攜版 checksum／版本核對。原有八流 fold 0 權重通過完整鍵／尺寸預覽；合成單／多流模型匯出後載回，預測 logits 相同。
-
-GitHub fork／blob／commit／分支及 Hugging Face 上傳測試使用模擬 API，沒有實際建立 fork、PR 或執行 push。因此本機流程已驗證，但真正帳號權限與遠端傳輸仍要在你執行啟動檔時確認。
+實際帳號權限、Hub 容量限制與傳輸成功仍以你執行 BAT 的結果為準。腳本會先確認 Hugging Face 寫入權限，再匯出整套模型。
 
 ## 參考
 
-- [GitHub CLI fork](https://cli.github.com/manual/gh_repo_fork)
 - [GitHub CLI 登入](https://cli.github.com/manual/gh_auth_login)
 - [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/guides/cli)
 - [Hugging Face 上傳](https://huggingface.co/docs/huggingface_hub/guides/upload)
-- [Torchvision Resize](https://docs.pytorch.org/vision/stable/generated/torchvision.transforms.Resize.html)

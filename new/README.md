@@ -14,7 +14,7 @@ Legacy files, datasets, private results and local environments are not included 
 multistream_project/
 ├── old/                         # 原有程式、模型、圖片、records、wandb、稽核
 ├── new/
-│   ├── main.py                  # 唯一入口，所有命令都從這裡開始
+│   ├── main.py                  # 訓練／驗證與本機 checkpoint 推論入口
 │   ├── configs/                 # 共用設定與單流／多流範例
 │   ├── multistream/
 │   │   ├── config.py            # 設定繼承、路徑與參數檢查
@@ -27,7 +27,10 @@ multistream_project/
 │   │   └── cli.py               # 將上列模組連成命令流程
 │   ├── tools/
 │   │   ├── create_demo_data.py  # 產生合成圖片，確認程式流程
-│   │   └── run_experiments.py   # 在相同 split 上比較 16 組條件
+│   │   ├── run_experiments.py   # 在相同 split 上比較 16 組條件
+│   │   ├── infer_published.py   # 選擇 Hugging Face condition／fold 推論
+│   │   ├── export_model_collection.py # 匯出全部 stream／fold 模型
+│   │   └── upload_model_collection.py # 核對並逐模型上傳／續傳
 │   ├── tests/                   # 資料隔離、載入、指標及完整流程測試
 │   ├── artifacts/              # prepare 後產生 manifest.json / splits.json
 │   └── runs/                   # 每組實驗獨立目錄，不覆蓋舊紀錄
@@ -327,7 +330,7 @@ python tools/run_experiments.py --config configs/base.yaml --conditions single_g
 
 可執行 `python -m pytest tests -q` 重跑測試。測試包含病人隔離、fold 覆蓋、標籤矛盾、指紋錯配、同步裁切、各流數的 forward、strict checkpoint、warm start、指標手算、選模只用 validation，以及小型 CPU 訓練／驗證／推論。
 
-此次完整測試為 **58 passed、14 subtests passed**；另實際執行兩折單流／雙流、固定 test 重算、有／無標籤推論、Grad-CAM、新版單流初始化融合模型、16 條件工具的兩組試跑，以及原有單流權重的 strict 轉換。環境版本見 `requirements-tested.txt`，核對紀錄見 `verification.json`。這份版本清單記錄此次 CPU 測試，不是 GPU 環境的安裝指令。
+訓練框架初次交付時的測試為 **58 passed、14 subtests passed**；另實際執行兩折單流／雙流、固定 test 重算、有／無標籤推論、Grad-CAM、新版單流初始化融合模型、16 條件工具的兩組試跑，以及原有單流權重的 strict 轉換。環境版本見 `requirements-tested.txt`，核對紀錄見 `verification.json`。這份版本清單記錄此次 CPU 測試，不是 GPU 環境的安裝指令。
 
 完整流程測試使用合成資料，不能取代真實影像的效能驗證。原始真實影像與部分歷史推論模板未附於目前工作區，因此尚未在真實 cohort 重跑正式實驗。
 
@@ -338,6 +341,23 @@ python tools/run_experiments.py --config configs/base.yaml --conditions single_g
 
 ## 12. 發布到 GitHub 與 Hugging Face
 
-在 Windows 雙擊 [publish_erm_ai.bat](publish_erm_ai.bat)：fork `ntuhophai/ERM-AI` 到本機登入的 GitHub 帳號，提交新版程式到新分支，開啟由你手動建立 PR 的比較頁。模型部分讓你選 checkpoint，去除私人 metadata 並嚴格核對後，直接上傳 `ntuhophai/ERM-AI` Hugging Face 模型 repo。
+在 Windows 雙擊 [publish_erm_ai.bat](publish_erm_ai.bat)：fork `ntuhophai/ERM-AI` 到本機登入的 GitHub 帳號，提交新版程式與文件，開啟由你手動建立 PR 的比較頁。上次發布分支未遭其他修改且 PR 尚未關閉／合併時，會接續更新它，讓現有 PR 一併顯示更新內容。
 
-第一次仍需完成官方登入授權與模型選擇；密碼／Token 不寫入腳本。也提供單獨 GitHub／Hugging Face 與只預覽檔案清單的啟動檔。[完整操作說明](PUBLISHING.md) 包含舊模型設定、權限、失敗重試與公開範圍。發布工具新增後的完整測試（2026-10-12）為 79 項與 16 個子測試通過；遠端發布尚未代為執行。
+模型階段自動處理 **16 組 stream 條件 × 10 folds = 160 個模型，加上 7 個歷史權重，共 167 個**，直接提交到 Hugging Face 的 `ntuhophai/ERM-AI`。各條件／fold 有獨立目錄、純權重、config 和說明，不再只選一個 checkpoint。原始模型約 43.4 GB，首次匯出需要額外空間；中斷後可核對快取與遠端內容接續。
+
+第一次需完成官方登入與本機 legacy profile 確認；密碼／Token 不寫入腳本。舊模型仍保留於 `old/`。歷史設定不完整的 7 個模型保存 tensors 並標示不能自動推論。
+
+- [PUBLISHING.md](PUBLISHING.md)：BAT 操作、PR、權限、公開範圍與續傳。
+- [MODEL_CATALOG.md](MODEL_CATALOG.md)：全部模型、固定 stream 順序、架構、標籤與前處理限制。
+- [INFERENCE.md](INFERENCE.md)：下載指定模型／fold、全部十折推論、ensemble、機率 CSV 與固定版本。
+
+Hugging Face 模型推論範例（從 `new/` 執行）：
+
+```powershell
+.\.venv\Scripts\python.exe tools/infer_published.py --repo ntuhophai/ERM-AI --condition single_gray_inner --fold 0 --root "D:/my_cases" --output "predictions/gray_inner_fold0"
+.\.venv\Scripts\python.exe tools/infer_published.py --repo ntuhophai/ERM-AI --condition fusion_8 --all-folds --root "D:/my_cases" --output "predictions/fusion8_all"
+```
+
+請先等 BAT 完成全部模型與 catalog 發布。只下載指定模型，影像留在本機。這批 legacy 權重不含病人切分 metadata，不能將其推論成績改稱新版病人分組 CV。
+
+2026-10-12 更新後完整測試：**125 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。

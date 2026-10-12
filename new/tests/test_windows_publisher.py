@@ -12,7 +12,7 @@ POWERSHELL = shutil.which("powershell.exe")
 
 
 @pytest.mark.skipif(os.name != "nt" or not POWERSHELL, reason="Windows PowerShell check")
-@pytest.mark.parametrize("case", ["native-exit", "source-list", "wrong-fork", "github-flow"])
+@pytest.mark.parametrize("case", ["native-exit", "source-list", "wrong-fork", "github-flow", "github-reuse", "model-flow"])
 def test_windows_publishing_guards_without_network(case):
     completed = subprocess.run([
         POWERSHELL, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",

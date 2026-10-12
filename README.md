@@ -4,6 +4,8 @@ Single-stream and multistream OCT research code lives in [`new/`](new/).
 
 - [Usage and experiment workflow](new/README.md)
 - [Windows publishing launcher](new/PUBLISHING.md)
+- [Published model download and inference](new/INFERENCE.md)
+- [All stream/fold models and model architecture](new/MODEL_CATALOG.md)
 - Model repository: https://huggingface.co/ntuhophai/ERM-AI
 
 ```powershell

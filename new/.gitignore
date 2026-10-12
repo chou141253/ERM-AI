@@ -9,3 +9,5 @@ smoke_output/
 *.pth
 *.pt
 .publish-work/
+predictions/
+downloaded_models/
