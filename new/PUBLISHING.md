@@ -65,6 +65,8 @@ PR 紀錄保存在 `new/.publish-work/upload-collection-pr-state.json`，含 PR 
 
 若出現「PR creation has no confirmed outcome」或「previous PR creation has no confirmed receipt」，伺服器可能已建立草稿但後續回應失敗。請保留該紀錄，查看 Hugging Face 的 Community 頁面是否已有自己的草稿 PR，提供 PR 網址以便恢復；不要直接把紀錄改名後盲目重開。
 
+若 Windows 在移動暫存模型目錄時出現 `WinError 5`／`32`／`33`，可能是檔案仍被掃描或其他程式開啟。新版會做有限次重試，持續失敗則保留完整暫存與先前完成的模型。關閉正在預覽模型快取檔案的視窗後可重跑；前面顯示 `Reusing verified export` 的項目會直接重用，無需刪除資料或 PR 紀錄。
+
 ## 4. 啟動檔與環境
 
 | 檔案 | 動作 |
@@ -86,7 +88,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/launch_publish.ps1
 
 ## 5. 本機驗證範圍
 
-2026-10-12 更新後完整測試：**179 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。
+2026-10-12 更新後完整測試：**186 passed、33 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整模型包已在本機匯出並通過上傳前檢查；真正遠端傳輸由 BAT 執行。
 
 測試涵蓋完整性核對、純權重匯出與載回、快取重用、分 fold 推論、機率平均、版本與雜湊核對、GitHub 分支更新，以及 Hugging Face 逐模型提交與續傳。遠端寫入測試使用模擬 API；測試本身不登入、不 fork、不上傳。
 

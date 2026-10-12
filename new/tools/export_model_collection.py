@@ -16,7 +16,7 @@ import yaml
 from export_public_model import (
     PUBLIC_LOADER, _class_mapping, _model_card, _ordered_streams,
     _public_code_url, _public_preprocessing, _safe_model_config,
-    _tensor_state, export_public_model,
+    _tensor_state, _rename_with_retry, export_public_model,
 )
 
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -298,6 +298,7 @@ def export_collection(records_root, profiles_path, output, code_url=None, plan_o
                  and previous.get("weights_sha256") == file_sha256(leaf / "model.safetensors")
                  and previous.get("config_sha256") == file_sha256(leaf / "config.json"))
         if not valid:
+            print("  Exporting missing or changed model", flush=True)
             free = shutil.disk_usage(output).free
             if free < item["source_bytes"] * 2 + 256 * 1024 * 1024:
                 raise RuntimeError("Not enough disk space for the next model; retain progress and free space before retrying")
@@ -331,10 +332,11 @@ def export_collection(records_root, profiles_path, output, code_url=None, plan_o
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 if not leaf.resolve().is_relative_to(output) or not backup.resolve().is_relative_to(state_root):
                     raise RuntimeError("Unsafe model cache replacement target")
-                leaf.rename(backup)  # Preserve an earlier public export instead of deleting it.
-            stage.rename(leaf)
+                _rename_with_retry(leaf, backup)  # Preserve an earlier public export instead of deleting it.
+            _rename_with_retry(stage, leaf)
             exported += 1
         else:
+            print("  Reusing verified export", flush=True)
             reused += 1
         card = (_collection_model_card(metadata, item, profiles, code_url)
                 if item["inference_ready"] else _historical_card(metadata))

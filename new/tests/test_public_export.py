@@ -2,9 +2,13 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
+import threading
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import torch
 import numpy as np
@@ -75,6 +79,172 @@ def _legacy_state(model):
             key = "fc." + key[len("classifier."):]
         result[key] = value
     return result
+
+
+def _windows_lock(code=5):
+    error = PermissionError(13, "simulated transient Windows file lock")
+    error.winerror = code
+    return error
+
+
+class RenameCommitTests(unittest.TestCase):
+    def _stage(self, directory):
+        source = directory / "stage"
+        source.mkdir()
+        (source / "weights.txt").write_text("preserve this completed output")
+        return source, directory / "committed"
+
+    def test_transient_windows_lock_retries_without_losing_output(self):
+        for code in (5, 32, 33):
+            with self.subTest(winerror=code), tempfile.TemporaryDirectory() as temp:
+                source, target = self._stage(Path(temp))
+                original = Path.rename
+                calls = []
+
+                def locked_then_released(path, destination):
+                    calls.append(path)
+                    if len(calls) < 3:
+                        raise _windows_lock(code)
+                    return original(path, destination)
+
+                with mock.patch.object(Path, "rename", locked_then_released), \
+                        mock.patch.object(exporter.time, "sleep") as wait:
+                    exporter._rename_with_retry(source, target)
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(wait.call_args_list, [mock.call(0.2), mock.call(0.4)])
+                self.assertFalse(source.exists())
+                self.assertEqual((target / "weights.txt").read_text(), "preserve this completed output")
+
+    def test_permanent_windows_lock_is_bounded_and_preserves_original_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, target = self._stage(Path(temp))
+            error = _windows_lock()
+            with mock.patch.object(Path, "rename", side_effect=error) as rename, \
+                    mock.patch.object(exporter.time, "sleep") as wait:
+                with self.assertRaises(OSError) as caught:
+                    exporter._rename_with_retry(source, target)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(rename.call_count, 10)
+            self.assertEqual(wait.call_count, 9)
+            self.assertLess(sum(call.args[0] for call in wait.call_args_list), 10)
+            self.assertEqual((source / "weights.txt").read_text(), "preserve this completed output")
+            self.assertFalse(target.exists())
+
+    def test_existing_or_appearing_destination_is_never_overwritten(self):
+        for appears_during_retry in (False, True):
+            with self.subTest(during_retry=appears_during_retry), tempfile.TemporaryDirectory() as temp:
+                source, target = self._stage(Path(temp))
+
+                def competing_writer(_delay=None):
+                    target.mkdir()
+                    (target / "existing.txt").write_text("another completed export")
+
+                if not appears_during_retry:
+                    competing_writer()
+                with mock.patch.object(Path, "rename", side_effect=_windows_lock()) as rename, \
+                        mock.patch.object(exporter.time, "sleep", side_effect=competing_writer):
+                    with self.assertRaises(FileExistsError):
+                        exporter._rename_with_retry(source, target)
+                self.assertEqual(rename.call_count, int(appears_during_retry))
+                self.assertEqual((target / "existing.txt").read_text(), "another completed export")
+                self.assertTrue((source / "weights.txt").is_file())
+
+    def test_other_os_errors_are_not_retried(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, target = self._stage(Path(temp))
+            error = PermissionError(13, "permanent permissions problem without Windows lock code")
+            with mock.patch.object(Path, "rename", side_effect=error) as rename, \
+                    mock.patch.object(exporter.time, "sleep") as wait:
+                with self.assertRaises(OSError) as caught:
+                    exporter._rename_with_retry(source, target)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(rename.call_count, 1)
+            wait.assert_not_called()
+            self.assertTrue(source.is_dir())
+
+    def test_reparse_source_is_rejected_before_rename(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, target = self._stage(Path(temp))
+            original = Path.lstat
+
+            def reparse_source(path):
+                details = original(path)
+                return (SimpleNamespace(st_mode=details.st_mode, st_file_attributes=0x400)
+                        if path == source else details)
+
+            with mock.patch.object(Path, "lstat", reparse_source), \
+                    mock.patch.object(Path, "rename") as rename:
+                with self.assertRaisesRegex(ValueError, "Linked rename"):
+                    exporter._rename_with_retry(source, target)
+            rename.assert_not_called()
+            self.assertTrue(source.is_dir())
+
+    def test_complete_public_staging_is_preserved_after_permanent_lock(self):
+        metadata = {
+            "public_format_version": 1, "model_config": exporter._safe_model_config(MODEL_CONFIG),
+            "streams": ["_vertical"], "class_to_idx": CLASSES,
+            "preprocessing": exporter._public_preprocessing(PREPROCESSING, False),
+            "artifact_kind": "research", "source_format": "versioned_checkpoint",
+            "settings_provenance": "checkpoint_metadata", "legacy_no_split_metadata": False,
+            "private_training_metadata_omitted": True,
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            target = directory / "public"
+            error = _windows_lock()
+            with mock.patch.object(exporter, "read_public_source", return_value=({"weight": torch.ones(1)}, metadata)), \
+                    mock.patch.object(exporter, "_validate_state"), \
+                    mock.patch.object(Path, "rename", side_effect=error), \
+                    mock.patch.object(exporter.time, "sleep"):
+                with self.assertRaises(OSError) as caught:
+                    exporter.export_public_model("unused-source.pth", target)
+            self.assertIs(caught.exception, error)
+            self.assertFalse(target.exists())
+            stages = list(directory.glob(".public-model-*"))
+            self.assertEqual(len(stages), 1)
+            self.assertEqual({path.name for path in stages[0].iterdir()}, PUBLIC_FILES)
+            from safetensors.torch import load_file
+            torch.testing.assert_close(load_file(str(stages[0] / "model.safetensors"))["weight"], torch.ones(1))
+
+    @unittest.skipUnless(os.name == "nt", "Requires Windows file-sharing semantics")
+    def test_real_windows_file_handle_lock_releases_before_retry(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        with tempfile.TemporaryDirectory() as temp:
+            source, target = self._stage(Path(temp))
+            # Permit reads/writes while withholding FILE_SHARE_DELETE, as a
+            # temporary scanner lock can do. The parent rename then fails.
+            handle = kernel.CreateFileW(str(source / "weights.txt"), 0x80000000, 3,
+                                        None, 3, 0x80, None)
+            self.assertNotIn(handle, (None, ctypes.c_void_p(-1).value))
+            released = threading.Event()
+
+            def release():
+                kernel.CloseHandle(handle)
+                released.set()
+
+            timer = None
+            try:
+                with self.assertRaises(OSError) as caught:
+                    source.rename(target)
+                self.assertEqual(caught.exception.winerror, 5)
+                timer = threading.Timer(0.3, release)
+                timer.start()
+                exporter._rename_with_retry(source, target)
+                self.assertTrue(released.is_set())
+                self.assertEqual((target / "weights.txt").read_text(), "preserve this completed output")
+            finally:
+                if timer is not None:
+                    timer.cancel()
+                    timer.join()
+                if not released.is_set():
+                    release()
 
 
 class PublicExportTests(unittest.TestCase):

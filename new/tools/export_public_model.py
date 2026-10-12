@@ -10,7 +10,9 @@ import json
 import math
 from pathlib import Path
 import re
+import stat
 import tempfile
+import time
 from urllib.parse import urlparse
 
 
@@ -486,6 +488,34 @@ def _model_card(metadata, code_url=None):
     )
 
 
+def _rename_with_retry(source, target):
+    """Commit an ordinary directory without overwriting or discarding staged files."""
+    source, target = Path(source).absolute(), Path(target).absolute()
+    delays = (0.2, 0.4, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    for attempt in range(len(delays) + 1):
+        # Recheck on every attempt: a destination may have appeared during a
+        # transient Windows scanner/file-sharing lock. Never replace that path.
+        for directory in (source, *source.parents, target.parent, *target.parent.parents):
+            details = directory.lstat()
+            if (stat.S_ISLNK(details.st_mode)
+                    or getattr(details, "st_file_attributes", 0) & 0x400):
+                raise ValueError("Linked rename locations are not allowed")
+            if not stat.S_ISDIR(details.st_mode):
+                raise ValueError("Model rename locations must be ordinary directories")
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError("Model destination already exists; refusing overwrite")
+        try:
+            return source.rename(target)
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == len(delays):
+                raise
+            time.sleep(delays[attempt])
+
+
 def export_public_model(checkpoint_path, output, legacy_config=None, kind="research",
                         code_url=None, preview=False):
     """Export tensors and public metadata; never copy the full checkpoint object."""
@@ -506,6 +536,7 @@ def export_public_model(checkpoint_path, output, legacy_config=None, kind="resea
         raise RuntimeError("Temporary export directory resolved outside its intended parent")
     known_files = {"model.safetensors", "config.json", "modeling_multistream.py",
                    "README.md", "requirements.txt"}
+    stage_complete = False
     try:
         # Cloning each tensor prevents shared-storage serialization surprises.
         public_tensors = {key: value.detach().cpu().contiguous().clone()
@@ -524,13 +555,17 @@ def export_public_model(checkpoint_path, output, legacy_config=None, kind="resea
         (stage / "requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
         if {p.name for p in stage.iterdir()} != known_files:
             raise RuntimeError("Unexpected file in the public export")
+        stage_complete = True
         if output.exists():
             raise FileExistsError("Export destination appeared while staging; refusing overwrite")
-        stage.rename(output)
+        _rename_with_retry(stage, output)
     finally:
+        # A complete export blocked at commit is useful recovery evidence. Keep
+        # its tensors and metadata instead of deleting the expensive output.
         # Only remove known files from the exact directory created above.
         # Never recurse into a computed or operator-owned directory.
-        if stage.exists() and stage.parent == output.parent and stage.name.startswith(".public-model-"):
+        if (not stage_complete and stage.exists() and stage.parent == output.parent
+                and stage.name.startswith(".public-model-")):
             for name in known_files:
                 file = stage / name
                 if file.is_file() and not file.is_symlink():
