@@ -86,7 +86,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/launch_publish.ps1
 
 ## 5. 本機驗證範圍
 
-2026-10-12 更新後完整測試：**176 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。
+2026-10-12 更新後完整測試：**179 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。
 
 測試涵蓋完整性核對、純權重匯出與載回、快取重用、分 fold 推論、機率平均、版本與雜湊核對、GitHub 分支更新，以及 Hugging Face 逐模型提交與續傳。遠端寫入測試使用模擬 API；測試本身不登入、不 fork、不上傳。
 

@@ -847,3 +847,37 @@ def test_pr_identity_failure_after_access_check_is_sanitized(uploader, monkeypat
         uploader.prepare_pr(state_file=tmp_path / "pr-state.json")
     assert api.create_attempts == 0 and "PRIVATE_AUTH_DETAILS" not in str(failure.value) + capsys.readouterr().out
     assert "hf_" not in str(failure.value)
+
+
+def test_pr_qualified_main_target_uses_real_sdk_details_and_same_pr(collection, uploader, monkeypatch):
+    from datetime import datetime, timezone
+    from huggingface_hub.community import DiscussionWithDetails
+    api = FakePrApi()
+    def details():
+        return DiscussionWithDetails(
+            title="Publish complete OCT stream/fold model collection", num=api.pr_num,
+            author=api.account, status=api.pr_status, created_at=datetime.now(timezone.utc),
+            repo_id=api.pr_repo, repo_type="model", is_pull_request=True,
+            endpoint="https://huggingface.co", events=[], conflicting_files=[], target_branch="refs/heads/main",
+            merge_commit_oid=None, diff=None,
+        )
+    monkeypatch.setattr(api, "_details", details)
+    state_path = collection.parent / "qualified-pr-state.json"
+    state = _prepare(uploader, api, monkeypatch, state_path)
+    assert state["target_branch"] == "main" and state["pr_ref"] == "refs/pr/7"
+    result = uploader.upload_collection(collection, mode="pr", state_file=state_path)
+    assert result["pr_status"] == "open" and api.create_attempts == 1
+    assert all(call["revision"] == "refs/pr/7" for call in _uploads(api))
+    uploader.prepare_pr(state_file=state_path)
+    assert api.create_attempts == 1
+
+
+@pytest.mark.parametrize("target", [None, "refs/heads/other"])
+def test_pr_ambiguous_or_different_target_is_rejected(collection, uploader, monkeypatch, target):
+    api = FakePrApi()
+    state_path = collection.parent / "invalid-target-pr-state.json"
+    _prepare(uploader, api, monkeypatch, state_path)
+    api.pr_target = target
+    with pytest.raises(RuntimeError, match="does not match"):
+        uploader.upload_collection(collection, mode="pr", state_file=state_path)
+    assert not _uploads(api) and api.create_attempts == 1

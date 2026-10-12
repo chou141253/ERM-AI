@@ -473,11 +473,16 @@ def _read_pr_state(path, repo_id, account):
     return state
 
 
+def _canonical_pr_target(value):
+    # Hub responses can return the fully qualified Git ref for the main branch.
+    return "main" if value in ("main", "refs/heads/main") else value
+
+
 def _validate_pr_details(details, state, account):
     if (_value(details, "repo_id") != state["repo"] or _value(details, "repo_type") != "model"
             or _value(details, "author") != account or _value(details, "is_pull_request") is not True
             or _value(details, "num") != state["pr_num"] or _value(details, "git_reference") != state["pr_ref"]
-            or _value(details, "target_branch") != state["target_branch"]
+            or _canonical_pr_target(_value(details, "target_branch")) != state["target_branch"]
             or _value(details, "url") != state["pr_url"]):
         raise RuntimeError("The saved PR does not match this repository, contributor, or branch; upload stopped")
     status = _value(details, "status")
