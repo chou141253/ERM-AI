@@ -1,4 +1,5 @@
-param([ValidateSet('All', 'GitHub', 'HuggingFace', 'Preview')][string]$Target = 'All')
+param([ValidateSet('All', 'GitHub', 'HuggingFace', 'Preview')][string]$Target = 'All',
+      [ValidateSet('Direct', 'PullRequest')][string]$ModelPublishMode = 'PullRequest')
 $ErrorActionPreference = 'Stop'
 try {
     $main = Join-Path $PSScriptRoot 'publish_erm_ai.ps1'
@@ -9,7 +10,7 @@ try {
         foreach ($problem in $parseErrors) { Write-Host $problem.ToString() -ForegroundColor Red }
         throw 'Publisher syntax check failed. No publishing commands were run.'
     }
-    & $main -Target $Target
+    & $main -Target $Target -ModelPublishMode $ModelPublishMode
     exit 0
 } catch {
     Write-Host ''

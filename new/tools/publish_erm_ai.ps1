@@ -1,4 +1,6 @@
-param([ValidateSet('All', 'GitHub', 'HuggingFace', 'Preview')][string]$Target = 'All', [switch]$DefinitionsOnly)
+param([ValidateSet('All', 'GitHub', 'HuggingFace', 'Preview')][string]$Target = 'All',
+      [ValidateSet('Direct', 'PullRequest')][string]$ModelPublishMode = 'PullRequest',
+      [switch]$DefinitionsOnly)
 # ASCII source intentionally supports Windows PowerShell 5.1 without an encoding dependency.
 $ErrorActionPreference = 'Stop'
 $env:GH_DEBUG = $null
@@ -158,6 +160,9 @@ Single-stream and multistream OCT research code lives in [`new/`](new/).
 - [Published model download and inference](new/INFERENCE.md)
 - [All stream/fold models and model architecture](new/MODEL_CATALOG.md)
 - Model repository: https://huggingface.co/ntuhophai/ERM-AI
+
+Windows model publishing defaults to one Hugging Face pull request for the complete collection.
+The repository maintainer reviews and merges it; the launcher never merges the PR.
 
 ```powershell
 cd new
@@ -319,7 +324,9 @@ function Select-File([string]$Title, [string]$Filter, [string]$InitialDirectory)
 }
 
 function Publish-HuggingFace {
-    Write-Host ('Model target: https://huggingface.co/' + $ModelRepo + ' (all models, direct commits)') -ForegroundColor Cyan
+    $mode = if ($ModelPublishMode -eq 'PullRequest') { 'pr' } else { 'direct' }
+    $targetDescription = if ($mode -eq 'pr') { 'all models in one pull request; maintainer merges' } else { 'all models, direct commits' }
+    Write-Host ('Model target: https://huggingface.co/' + $ModelRepo + ' (' + $targetDescription + ')') -ForegroundColor Cyan
     $records = Join-Path $WorkspaceRoot 'old/records'
     $profiles = Join-Path $CodeRoot 'publish_profiles/legacy_collection.yaml'
     $exporter = Join-Path $PSScriptRoot 'export_model_collection.py'
@@ -330,21 +337,48 @@ function Publish-HuggingFace {
     Write-Host 'Four-/six-stream runtime versions were not retained; review legacy_collection.yaml if their resize settings differ.'
     $confirmed = Read-Host 'Type YES to publish every listed legacy model using these declared profiles'
     if ($confirmed -cne 'YES') { Write-Host 'HUGGING FACE SKIPPED: collection profiles were not confirmed.'; return }
-    Write-Host 'Confirming write access before exporting the full collection ...'
-    Invoke-Native $script:Python @($uploader, '--repo', $ModelRepo, '--login-only')
     $collection = Join-Path $WorkRoot 'model-collection'
-    $uploadState = Join-Path $WorkRoot 'upload-collection-state.json'
+    $stateName = if ($mode -eq 'pr') { 'upload-collection-pr-state.json' } else { 'upload-collection-state.json' }
+    $uploadState = Join-Path $WorkRoot $stateName
+    $accessDescription = if ($mode -eq 'pr') { 'Confirming login and repository read access before preparing the model PR ...' } else { 'Confirming write access before exporting the full collection ...' }
+    Write-Host $accessDescription
+    Invoke-Native $script:Python @($uploader, '--repo', $ModelRepo, '--mode', $mode, '--login-only')
+    if ($mode -eq 'pr') {
+        Write-Host 'Preparing or resuming one model PR before exporting the full collection ...'
+        $prepareArguments = @($uploader, '--repo', $ModelRepo, '--mode', 'pr', '--prepare-pr', '--state-file', $uploadState)
+        if ($script:PublishedCodeUrl -match '^https://github\.com/[A-Za-z0-9-]+/ERM-AI/tree/[a-fA-F0-9]{40}/new$') {
+            $prepareArguments += @('--code-url', $script:PublishedCodeUrl)
+        }
+        Invoke-Native $script:Python $prepareArguments
+    }
     Write-Host 'Exporting all models into stable per-condition/per-fold directories. Completed exports are reused on retry.'
     Invoke-Native $script:Python @($exporter, '--records-root', $records, '--profiles', $profiles, '--output', $collection, '--code-url', $script:PublishedCodeUrl)
     Write-Host 'Uploading models one at a time. Remote weights/configs are checked before skipping completed items.'
-    Invoke-Native $script:Python @($uploader, '--folder', $collection, '--repo', $ModelRepo, '--state-file', $uploadState)
-    Write-Host ('HUGGING FACE COMPLETE: https://huggingface.co/' + $ModelRepo) -ForegroundColor Green
+    Invoke-Native $script:Python @($uploader, '--folder', $collection, '--repo', $ModelRepo, '--mode', $mode, '--state-file', $uploadState)
+    if ($mode -eq 'pr') {
+        if (-not (Test-Path -LiteralPath $uploadState -PathType Leaf)) { throw 'The model PR upload completed without its local PR receipt. Check the uploader output.' }
+        $receipt = [IO.File]::ReadAllText($uploadState, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        $expectedPrefix = 'https://huggingface.co/' + $ModelRepo + '/discussions/'
+        if (-not $receipt.pr_url -or $receipt.repo -ne $ModelRepo -or $receipt.pr_status -ne 'open' -or
+                $receipt.pr_url -notmatch ('^' + [regex]::Escape($expectedPrefix) + '[1-9][0-9]*$')) {
+            throw 'The local model PR receipt did not identify the expected target repository.'
+        }
+        Write-Host ('HUGGING FACE PR READY: ' + $receipt.pr_url) -ForegroundColor Green
+        Write-Host 'All uploaded models are on this open PR branch. The repository maintainer must review and merge it into the main branch.'
+        Start-Process -FilePath $receipt.pr_url | Out-Null
+    } else {
+        Write-Host ('HUGGING FACE COMPLETE: https://huggingface.co/' + $ModelRepo) -ForegroundColor Green
+    }
 }
 if ($DefinitionsOnly) { return }
 Set-Location -LiteralPath $CodeRoot
 Write-Host 'ERM-AI publisher' -ForegroundColor Cyan
 Write-Host 'GitHub: personal fork and publication branch; you create or review the PR in the browser.'
-Write-Host 'Hugging Face: every stream/fold model, plus historical tensor archives, in separate directories.'
+if ($ModelPublishMode -eq 'PullRequest') {
+    Write-Host 'Hugging Face: every stream/fold model and historical tensor archive in one resumable PR; the maintainer merges it.'
+} else {
+    Write-Host 'Hugging Face: every stream/fold model and historical tensor archive in separate directories, direct commits.'
+}
 Write-Host 'Passwords/tokens are entered only in the official local login flow. The original files are kept.'
 $publicFiles = @(Get-PublicFiles)
 Save-Json (Join-Path $SessionRoot 'public-source-manifest.json') @{

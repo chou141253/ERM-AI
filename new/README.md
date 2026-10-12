@@ -343,7 +343,7 @@ python tools/run_experiments.py --config configs/base.yaml --conditions single_g
 
 在 Windows 雙擊 [publish_erm_ai.bat](publish_erm_ai.bat)：fork `ntuhophai/ERM-AI` 到本機登入的 GitHub 帳號，提交新版程式與文件，開啟由你手動建立 PR 的比較頁。上次發布分支未遭其他修改且 PR 尚未關閉／合併時，會接續更新它，讓現有 PR 一併顯示更新內容。
 
-模型階段自動處理 **16 組 stream 條件 × 10 folds = 160 個模型，加上 7 個歷史權重，共 167 個**，直接提交到 Hugging Face 的 `ntuhophai/ERM-AI`。各條件／fold 有獨立目錄、純權重、config 和說明，不再只選一個 checkpoint。原始模型約 43.4 GB，首次匯出需要額外空間；中斷後可核對快取與遠端內容接續。
+模型階段自動處理 **16 組 stream 條件 × 10 folds = 160 個模型，加上 7 個歷史權重，共 167 個**，提交到 Hugging Face 的 `ntuhophai/ERM-AI` 同一個 PR，待管理者合併。各條件／fold 有獨立目錄、純權重、config 和說明，不再只選一個 checkpoint。原始模型約 43.4 GB，首次匯出需要額外空間；中斷後可核對快取與遠端內容接續。
 
 第一次需完成官方登入與本機 legacy profile 確認；密碼／Token 不寫入腳本。舊模型仍保留於 `old/`。歷史設定不完整的 7 個模型保存 tensors 並標示不能自動推論。
 
@@ -358,6 +358,6 @@ Hugging Face 模型推論範例（從 `new/` 執行）：
 .\.venv\Scripts\python.exe tools/infer_published.py --repo ntuhophai/ERM-AI --condition fusion_8 --all-folds --root "D:/my_cases" --output "predictions/fusion8_all"
 ```
 
-請先等 BAT 完成全部模型與 catalog 發布。只下載指定模型，影像留在本機。這批 legacy 權重不含病人切分 metadata，不能將其推論成績改稱新版病人分組 CV。
+請先等 BAT 完成全部模型與 catalog 上傳到 PR；尚未合併時加 `--revision refs/pr/<number>`，合併後可使用預設正式版本。只下載指定模型，影像留在本機。這批 legacy 權重不含病人切分 metadata，不能將其推論成績改稱新版病人分組 CV。
 
-2026-10-12 更新後完整測試：**125 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。
+2026-10-12 更新後完整測試：**176 passed、28 subtests passed**。正式160個fold模型的權重鍵、尺寸與型別亦全部符合宣告架構；完整43GB匯出與真正遠端傳輸由BAT執行時完成。

@@ -1,6 +1,6 @@
 # 全部模型、stream 與 fold
 
-Hugging Face 目的地：[ntuhophai/ERM-AI](https://huggingface.co/ntuhophai/ERM-AI)。新版 BAT 發布整套模型，不再只選一個 checkpoint。
+Hugging Face 目的地：[ntuhophai/ERM-AI](https://huggingface.co/ntuhophai/ERM-AI)。新版 BAT 將整套模型提交到同一個 Hugging Face PR。管理者合併後才會出現在正式版本；合併前可指定 PR revision 推論。
 
 ## 包含哪些模型
 

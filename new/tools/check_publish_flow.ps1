@@ -30,24 +30,37 @@ if ($Case -eq 'source-list') {
     exit 0
 }
 
-if ($Case -eq 'model-flow') {
-    # Use production path strings, but never create/export/upload a collection.
-    $WorkRoot = $ProductionWorkRoot
+if ($Case -in @('model-flow', 'model-direct', 'model-no-github')) {
+    # Isolated local receipts only: no collection export, CLI login, network or browser.
+    $ModelPublishMode = if ($Case -eq 'model-direct') { 'Direct' } else { 'PullRequest' }
+    $isPr = ($ModelPublishMode -eq 'PullRequest')
     $script:Python = $TestInterpreter
-    $script:PublishedCodeUrl = 'https://github.com/publisher-test/ERM-AI/tree/publish/test-code/new'
+    $script:PublishedCodeUrl = if ($Case -eq 'model-no-github') { 'https://github.com/ntuhophai/ERM-AI' } else { 'https://github.com/publisher-test/ERM-AI/tree/' + ('a' * 40) + '/new' }
     $script:ModelCalls = New-Object System.Collections.Generic.List[object]
     $script:MockConfirmation = 'YES'
     $script:FailModelLogin = $false
+    $script:FailPreparePr = $false
+    $script:BadPrReceipt = $false
     $script:MockPlan = @{ model_count = 167; inference_ready_count = 160; historical_count = 7; condition_count = 16; fold_count = 10 }
+    $mockPrUrl = 'https://huggingface.co/ntuhophai/ERM-AI/discussions/42'
     function Select-File { throw 'The collection flow must not show a single-checkpoint picker.' }
     function Read-Host([string]$Prompt) {
         $script:ModelCalls.Add(@{ kind = 'confirmation'; prompt = $Prompt })
         return $script:MockConfirmation
     }
+    function Start-Process([string]$FilePath) { $script:ModelCalls.Add(@{ kind = 'browser'; url = $FilePath }) }
     function Invoke-Native([string]$Exe, [string[]]$Arguments) {
         $script:ModelCalls.Add(@{ kind = 'native'; exe = $Exe; arguments = @($Arguments) })
         if ($Arguments -contains '--plan-only') { Write-Host (ConvertTo-Json $script:MockPlan -Compress) }
-        if ($script:FailModelLogin -and $Arguments -contains '--login-only') { throw 'Mock model write-access denial.' }
+        if ($script:FailModelLogin -and $Arguments -contains '--login-only') { throw 'Mock model access denial.' }
+        if ($script:FailPreparePr -and $Arguments -contains '--prepare-pr') { throw 'Mock PR preparation denial.' }
+        if ($isPr -and ($Arguments -contains '--prepare-pr' -or $Arguments -contains '--folder')) {
+            $stateIndex = [Array]::IndexOf($Arguments, '--state-file')
+            if ($stateIndex -lt 0) { throw 'Missing PR state file.' }
+            $url = if ($script:BadPrReceipt) { 'https://example.invalid/unsafe' } else { $mockPrUrl }
+            $status = if ($Arguments -contains '--folder') { 'open' } else { 'draft' }
+            Save-Json $Arguments[$stateIndex + 1] @{ repo = 'ntuhophai/ERM-AI'; pr_url = $url; pr_ref = 'refs/pr/42'; pr_status = $status }
+        }
     }
     function Assert-ModelArgument($Call, [string]$Flag, [string]$Expected) {
         $position = [Array]::IndexOf([string[]]$Call.arguments, $Flag)
@@ -57,9 +70,8 @@ if ($Case -eq 'model-flow') {
     }
     function Assert-CompleteModelFlow {
         $events = $script:ModelCalls.ToArray()
-        if ($events.Count -ne 5 -or ($events.kind -join ',') -ne 'native,confirmation,native,native,native') {
-            throw 'Expected plan, confirmation, login, export and upload in that order.'
-        }
+        $expectedOrder = if ($isPr) { 'native,confirmation,native,native,native,native,browser' } else { 'native,confirmation,native,native,native' }
+        if (($events.kind -join ',') -cne $expectedOrder) { throw 'Incorrect plan, confirmation, access, PR preparation, export or upload order.' }
         $native = @($events | Where-Object { $_.kind -eq 'native' })
         foreach ($call in $native) {
             if ($call.exe -cne $TestInterpreter) { throw 'The model flow used an unexpected interpreter.' }
@@ -69,26 +81,43 @@ if ($Case -eq 'model-flow') {
         }
         $exporter = Join-Path $PSScriptRoot 'export_model_collection.py'
         $uploader = Join-Path $PSScriptRoot 'upload_model_collection.py'
+        $exportIndex = if ($isPr) { 3 } else { 2 }
+        $uploadIndex = $exportIndex + 1
+        $mode = if ($isPr) { 'pr' } else { 'direct' }
         if ($native[0].arguments[0] -cne $exporter -or -not ($native[0].arguments -contains '--plan-only')) { throw 'Missing collection plan.' }
         if ($native[1].arguments[0] -cne $uploader -or -not ($native[1].arguments -contains '--login-only') -or ($native[1].arguments -contains '--folder')) {
-            throw 'Write access must be checked before exporting, without requiring a collection folder.'
+            throw 'Access must be checked before exporting, without requiring a collection folder.'
         }
-        if ($native[2].arguments[0] -cne $exporter -or ($native[2].arguments -contains '--plan-only')) { throw 'Missing full collection export.' }
-        if ($native[3].arguments[0] -cne $uploader -or ($native[3].arguments -contains '--login-only')) { throw 'Missing collection upload.' }
-        $expectedRoot = Join-Path $CodeRoot '.publish-work'
-        $expectedCollection = Join-Path $expectedRoot 'model-collection'
-        $expectedState = Join-Path $expectedRoot 'upload-collection-state.json'
-        foreach ($call in @($native[0], $native[2])) {
+        if ($native[$exportIndex].arguments[0] -cne $exporter -or ($native[$exportIndex].arguments -contains '--plan-only')) { throw 'Missing full collection export.' }
+        if ($native[$uploadIndex].arguments[0] -cne $uploader -or ($native[$uploadIndex].arguments -contains '--login-only')) { throw 'Missing collection upload.' }
+        $expectedCollection = Join-Path $WorkRoot 'model-collection'
+        $stateName = if ($isPr) { 'upload-collection-pr-state.json' } else { 'upload-collection-state.json' }
+        $expectedState = Join-Path $WorkRoot $stateName
+        foreach ($call in @($native[0], $native[$exportIndex])) {
             Assert-ModelArgument $call '--records-root' (Join-Path $WorkspaceRoot 'old/records')
             Assert-ModelArgument $call '--profiles' (Join-Path $CodeRoot 'publish_profiles/legacy_collection.yaml')
         }
-        Assert-ModelArgument $native[1] '--repo' 'ntuhophai/ERM-AI'
-        Assert-ModelArgument $native[2] '--output' $expectedCollection
-        Assert-ModelArgument $native[2] '--code-url' $script:PublishedCodeUrl
-        Assert-ModelArgument $native[3] '--folder' $expectedCollection
-        Assert-ModelArgument $native[3] '--repo' 'ntuhophai/ERM-AI'
-        Assert-ModelArgument $native[3] '--state-file' $expectedState
-        if ([IO.Path]::GetDirectoryName($expectedState) -cne $expectedRoot -or $expectedState.StartsWith($expectedCollection + [IO.Path]::DirectorySeparatorChar)) {
+        foreach ($call in @($native[1], $native[$uploadIndex])) {
+            Assert-ModelArgument $call '--repo' 'ntuhophai/ERM-AI'
+            Assert-ModelArgument $call '--mode' $mode
+        }
+        Assert-ModelArgument $native[$exportIndex] '--output' $expectedCollection
+        Assert-ModelArgument $native[$exportIndex] '--code-url' $script:PublishedCodeUrl
+        Assert-ModelArgument $native[$uploadIndex] '--folder' $expectedCollection
+        Assert-ModelArgument $native[$uploadIndex] '--state-file' $expectedState
+        if ($isPr) {
+            if ($native[2].arguments[0] -cne $uploader -or -not ($native[2].arguments -contains '--prepare-pr')) { throw 'PR preparation must precede export.' }
+            Assert-ModelArgument $native[2] '--mode' 'pr'
+            Assert-ModelArgument $native[2] '--repo' 'ntuhophai/ERM-AI'
+            Assert-ModelArgument $native[2] '--state-file' $expectedState
+            if ($Case -eq 'model-no-github') {
+                if ($native[2].arguments -contains '--code-url') { throw 'PR preparation must omit a missing GitHub commit snapshot.' }
+            } else {
+                Assert-ModelArgument $native[2] '--code-url' $script:PublishedCodeUrl
+            }
+            if ($events[-1].url -cne $mockPrUrl) { throw 'The expected HF PR page was not opened.' }
+        }
+        if ([IO.Path]::GetDirectoryName($expectedState) -cne $WorkRoot -or $expectedState.StartsWith($expectedCollection + [IO.Path]::DirectorySeparatorChar)) {
             throw 'Upload state must remain outside the public collection.'
         }
         if ($script:MockPlan.model_count -ne 167 -or $script:MockPlan.inference_ready_count -ne 160 -or $script:MockPlan.historical_count -ne 7) {
@@ -112,7 +141,7 @@ if ($Case -eq 'model-flow') {
         Publish-HuggingFace
         if ($script:ModelCalls.Count -ne 2 -or ($script:ModelCalls.kind -join ',') -ne 'native,confirmation' -or
                 -not ($script:ModelCalls[0].arguments -contains '--plan-only')) {
-            throw 'A non-YES confirmation continued to login, export or upload.'
+            throw 'A non-YES confirmation continued to login, PR preparation, export or upload.'
         }
     }
     $script:ModelCalls.Clear()
@@ -121,9 +150,27 @@ if ($Case -eq 'model-flow') {
     $denied = $false
     try { Publish-HuggingFace } catch { $denied = $true }
     if (-not $denied -or $script:ModelCalls.Count -ne 3 -or -not ($script:ModelCalls[2].arguments -contains '--login-only')) {
-        throw 'Write-access denial must stop before the large export and upload.'
+        throw 'Access denial must stop before PR preparation and the large export/upload.'
     }
-    Write-Host 'Mock complete-model flow passed: 167 entries, stable collection/state, plan/login/export/upload order, cancellation and access denial. No model commands were executed.'
+    if ($isPr) {
+        $script:FailModelLogin = $false
+        $script:FailPreparePr = $true
+        $script:ModelCalls.Clear()
+        $denied = $false
+        try { Publish-HuggingFace } catch { $denied = $true }
+        if (-not $denied -or $script:ModelCalls.Count -ne 4 -or -not ($script:ModelCalls[3].arguments -contains '--prepare-pr')) {
+            throw 'PR preparation failure must stop before exporting or uploading models.'
+        }
+        $script:FailPreparePr = $false
+        $script:BadPrReceipt = $true
+        $script:ModelCalls.Clear()
+        $denied = $false
+        try { Publish-HuggingFace } catch { $denied = $true }
+        if (-not $denied -or @($script:ModelCalls | Where-Object { $_.kind -eq 'browser' }).Count) {
+            throw 'An invalid PR receipt must not open a browser page.'
+        }
+    }
+    Write-Host 'Mock complete-model flow passed: 167 entries, stable collection/state, PR/direct modes, access/preparation failure and cancellation. No model commands were executed.'
     exit 0
 }
 

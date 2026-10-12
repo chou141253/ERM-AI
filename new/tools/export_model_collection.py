@@ -219,6 +219,7 @@ def _collection_readme(items, profiles, code_url=None):
               "python tools/infer_published.py --repo ntuhophai/ERM-AI --condition single_gray_inner --fold 0 --root /path/to/cases --output predictions/single_gray_inner_fold0",
               "python tools/infer_published.py --repo ntuhophai/ERM-AI --condition fusion_8 --all-folds --root /path/to/cases --output predictions/fusion_8",
               "```", "",
+              "Before the model PR is merged, add --revision refs/pr/<number> to every Hub command above. After merge, the default main revision can be used. Wait for all models and catalog.json to finish uploading before inference.",
               "Only selected fold weights/configurations are downloaded. Pin --revision to a model repository commit for reproducible downloads. Predictions include per-class probabilities in the saved class index order.",
               "Case folders must provide one matching image per required stream. Both class/case/image folders and unlabeled case/image folders are supported.",
               "Use --ensemble only when you explicitly want a mean of the selected models' probabilities. This is prediction on one cohort, not out-of-fold validation.", "",
@@ -244,6 +245,7 @@ def _collection_model_card(metadata, item, profiles, code_url=None):
              + item["condition"] + " --fold " + str(item["fold"])
              + " --root /path/to/cases --output predictions/" + item["condition"]
              + "_fold" + str(item["fold"]) + "\n```\n\n"
+             "Before the model PR is merged, append --revision refs/pr/<number>; after merge the default main revision can be used.\n\n"
              "Only the selected weights/config are downloaded. Provide one image for each ordered stream. "
              "The local tool uses its trusted model definition and saves class probabilities.\n\n")
     card = card[:start] + usage + card[end:]

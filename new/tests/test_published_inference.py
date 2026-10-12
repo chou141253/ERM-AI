@@ -180,13 +180,13 @@ class PublishedInferenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(infer, "snapshot_download", return_value=str(self.repository)) as download:
                 summary = infer.run_inference(
-                    repo="example/synthetic-models", revision="main", condition=CONDITION,
+                    repo="example/synthetic-models", revision="refs/pr/42", condition=CONDITION,
                     folds=[0], root=self.unlabeled, output=Path(temp) / "result", device="cpu",
                 )
             self.assertEqual(download.call_count, 2)
             first, second = [call.kwargs for call in download.call_args_list]
             self.assertEqual(first["allow_patterns"], infer.ROOT_FILES)
-            self.assertEqual(first["revision"], "main")
+            self.assertEqual(first["revision"], "refs/pr/42")
             self.assertEqual(second["revision"], COMMIT)
             self.assertEqual(set(second["allow_patterns"]), {
                 "catalog.json", "modeling_multistream.py",

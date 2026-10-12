@@ -1,6 +1,6 @@
 # 從 Hugging Face 下載並推論
 
-這份說明適用整套 `ntuhophai/ERM-AI` 模型 collection。需先等 BAT 完成全部模型上傳與 `catalog.json` 發布；舊版只有根目錄單一模型時，尚不適用 collection 工具。
+這份說明適用整套 `ntuhophai/ERM-AI` 模型 collection。需先等 BAT 完成全部模型與 `catalog.json` 上傳到 PR。PR 尚未合併時，每個 Hub 指令都需加 `--revision refs/pr/<number>`；合併後可使用以下預設正式版本指令。舊版只有根目錄單一模型時，尚不適用 collection 工具。
 
 ## 1. 安裝程式環境
 
@@ -100,3 +100,16 @@ ensemble 是同一批影像經選定模型推論後的平均機率；**不是內
 ```
 
 這時不需 Hub 網路。也可從你的已下載 snapshot 目錄執行。
+
+
+## 8. PR 尚未合併時推論
+
+BAT 完成後會顯示 Hugging Face PR 網址，例如 `https://huggingface.co/ntuhophai/ERM-AI/discussions/42`。網址末尾數字就是 PR 編號；以下 `42` 只是範例，請換成你的實際編號。
+
+```powershell
+.\.venv\Scripts\python.exe tools/infer_published.py --repo ntuhophai/ERM-AI --revision refs/pr/42 --list
+.\.venv\Scripts\python.exe tools/infer_published.py --repo ntuhophai/ERM-AI --revision refs/pr/42 --condition single_gray_inner --fold 0 --root "D:/my_cases" --output "predictions/pr_gray_inner_fold0"
+.\.venv\Scripts\python.exe tools/infer_published.py --repo ntuhophai/ERM-AI --revision refs/pr/42 --condition fusion_8 --all-folds --root "D:/my_cases" --output "predictions/pr_fusion8_all"
+```
+
+程式仍會把 PR revision 解析成實際 commit，固定從同一版本下載索引與權重，並核對雜湊。PR 合併後可省略 `--revision`，或用正式版本的 commit SHA 固定下載。不要在上傳中途使用尚未完成的 collection。
